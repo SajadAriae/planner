@@ -1,70 +1,97 @@
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
+// ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
+const kVer = 2; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
 final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
-final refresh = ValueNotifier<int>(0);
+final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
+bool jal = true;
 
-const colors = [
-  Colors.teal,
-  Colors.indigo,
-  Colors.pink,
-  Colors.orange,
-  Colors.purple,
-  Colors.blueGrey,
-];
-
-const weekdaysFa = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'];
-const weekdaysShort = ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج'];
-const weekdayNumbers = [6, 7, 1, 2, 3, 4, 5];
-const monthsFa = [
-  'فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور',
-  'مهر','آبان','آذر','دی','بهمن','اسفند'
-];
-const monthsEn = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December'
-];
-
-String ds(DateTime d) =>
-    '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
-DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
-
-String moneyText(num v) =>
-    v.toStringAsFixed(0).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
-
-String digits(String s) {
-  return s
-      .replaceAll('۰','0').replaceAll('۱','1').replaceAll('۲','2')
-      .replaceAll('۳','3').replaceAll('۴','4').replaceAll('۵','5')
-      .replaceAll('۶','6').replaceAll('۷','7').replaceAll('۸','8')
-      .replaceAll('۹','9').replaceAll(',', '').replaceAll('٬', '');
+class Pal {
+  final String name;
+  final Color c;
+  final Color? darkBg;
+  const Pal(this.name, this.c, [this.darkBg]);
 }
 
-String hm(int minutes) =>
-    '${(minutes ~/ 60).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
+const pals = [
+  Pal('فیروزه‌ای', Colors.teal),
+  Pal('آبی سرمه‌ای', Colors.indigo),
+  Pal('صورتی', Colors.pink),
+  Pal('نارنجی (خاکستری تیره در حالت شب)', Colors.orange, Color(0xFF1E1E1E)),
+  Pal('بنفش', Colors.purple),
+  Pal('خاکستری آبی', Colors.blueGrey),
+  Pal('خاکستری تیره', Colors.grey, Color(0xFF161616)),
+];
 
-int minutesOf(TimeOfDay t) => t.hour * 60 + t.minute;
-
-String formatDate(DateTime d, bool jalali) {
-  if (!jalali) return '${d.year}/${d.month.toString().padLeft(2,'0')}/${d.day.toString().padLeft(2,'0')}';
-  final j = g2j(d.year, d.month, d.day);
-  return '${j[0]}/${j[1].toString().padLeft(2,'0')}/${j[2].toString().padLeft(2,'0')}';
+ThemeData mk(Pal p, Brightness b) {
+  var s = ColorScheme.fromSeed(seedColor: p.c, brightness: b);
+  final bg = b == Brightness.dark ? p.darkBg : null;
+  if (bg != null) {
+    Color up(double a) => Color.lerp(bg, Colors.white, a)!;
+    s = s.copyWith(
+        primary: p.c == Colors.grey ? Colors.orange : p.c,
+        onPrimary: Colors.black,
+        surface: bg,
+        surfaceContainerLowest: bg,
+        surfaceContainerLow: up(.05),
+        surfaceContainer: up(.08),
+        surfaceContainerHigh: up(.11),
+        surfaceContainerHighest: up(.14));
+  }
+  return ThemeData(useMaterial3: true, colorScheme: s, scaffoldBackgroundColor: bg);
 }
 
-/* -------------------- Jalali conversion -------------------- */
+const wdn = {6: 'شنبه', 7: 'یکشنبه', 1: 'دوشنبه', 2: 'سه‌شنبه', 3: 'چهارشنبه', 4: 'پنجشنبه', 5: 'جمعه'};
+const wdo = [6, 7, 1, 2, 3, 4, 5];
+const jmn = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+const hope = [
+  'امروز لازم نیست کامل باشی؛ یک قدم کوچیک هم حساب می‌شه.',
+  'هر کاری که امروز انجام دادی، از دیروز جلوترت می‌بره.',
+  'خسته شدن یعنی تلاش کردی. کمی نفس بکش و ادامه بده.',
+  'کارهای بزرگ از همین قدم‌های کوچیک ساخته می‌شن.',
+  'روزهای سخت‌تر از این رو هم رد کردی؛ این روز هم رد می‌شه.',
+  'نتیجه‌ی امروزت ممکنه فردا معلوم بشه. به مسیر اعتماد کن.',
+  'هر روز یه شروع تازه‌ست. همین الان یه کار کوچیک رو شروع کن.'
+];
 
+// ───────────────────────── ابزارهای عمومی ─────────────────────────
+String ds(DateTime d) => d.toIso8601String().substring(0, 10);
+String hm(int m) => '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
+// جداکننده‌ی سه‌رقمی با نقطه
+String n(num v) => v.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
+// تبدیل ارقام فارسی/عربی به انگلیسی و حذف جداکننده‌ها
+String en(String s) => s
+    .replaceAllMapped(RegExp('[۰-۹٠-٩]'), (m) {
+      final u = m[0]!.codeUnitAt(0);
+      return '${u >= 0x06F0 ? u - 0x06F0 : u - 0x0660}';
+    })
+    .replaceAll(RegExp(r'[.,٬،/\s]'), '');
+int byStart(Map a, Map b) => (a['s'] as int).compareTo(b['s'] as int);
+bool sameDay(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+
+class ThousandFmt extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue o, TextEditingValue v) {
+    var d = en(v.text).replaceAll(RegExp(r'\D'), '');
+    if (d.length > 15) d = d.substring(0, 15);
+    if (d.isEmpty) return const TextEditingValue(text: '');
+    final t = n(int.parse(d));
+    return TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+  }
+}
+
+// ───────────────────────── تقویم شمسی ─────────────────────────
 List<int> g2j(int gy, int gm, int gd) {
-  const gdm = [0,31,59,90,120,151,181,212,243,273,304,334];
+  const gdm = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
   final gy2 = gm > 2 ? gy + 1 : gy;
-  var days = 355666 + 365 * gy + (gy2 + 3) ~/ 4 -
-      (gy2 + 99) ~/ 100 + (gy2 + 399) ~/ 400 + gd + gdm[gm - 1];
+  var days = 355666 + 365 * gy + (gy2 + 3) ~/ 4 - (gy2 + 99) ~/ 100 + (gy2 + 399) ~/ 400 + gd + gdm[gm - 1];
   var jy = -1595 + 33 * (days ~/ 12053);
   days %= 12053;
   jy += 4 * (days ~/ 1461);
@@ -79,15 +106,14 @@ List<int> g2j(int gy, int gm, int gd) {
 }
 
 List<int> j2g(int jy, int jm, int jd) {
-  var y = jy + 1595;
-  var days = -355668 + 365 * y + (y ~/ 33) * 8 + ((y % 33) + 3) ~/ 4 + jd;
-  days += jm < 7 ? (jm - 1) * 31 : (jm - 7) * 30 + 186;
-
+  jy += 1595;
+  var days = -355668 + 365 * jy + (jy ~/ 33) * 8 + ((jy % 33) + 3) ~/ 4 + jd + (jm < 7 ? (jm - 1) * 31 : (jm - 7) * 30 + 186);
   var gy = 400 * (days ~/ 146097);
   days %= 146097;
   if (days > 36524) {
-    gy += 100 * ((days - 1) ~/ 36524);
-    days = (days - 1) % 36524;
+    days--;
+    gy += 100 * (days ~/ 36524);
+    days %= 36524;
     if (days >= 365) days++;
   }
   gy += 4 * (days ~/ 1461);
@@ -96,1242 +122,1155 @@ List<int> j2g(int jy, int jm, int jd) {
     gy += (days - 1) ~/ 365;
     days = (days - 1) % 365;
   }
-  final gd = days + 1;
-  const sal = [0,31,59,90,120,151,181,212,243,273,304,334];
+  var gd = days + 1;
+  final sal = [0, 31, (gy % 4 == 0 && gy % 100 != 0) || gy % 400 == 0 ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   var gm = 0;
-  for (var i = 1; i <= 12; i++) {
-    final start = sal[i - 1] + 1;
-    final end = sal[i] + 1;
-    final leap = (gy % 4 == 0 && gy % 100 != 0) || gy % 400 == 0;
-    final len = i == 2 ? (leap ? 29 : 28) : (i == 4 || i == 6 || i == 9 || i == 11 ? 30 : 31);
-    if (gd >= start && gd < start + len) {
-      gm = i;
-      break;
-    }
+  while (gm < 12 && gd > sal[gm]) {
+    gd -= sal[gm];
+    gm++;
   }
-  if (gm == 0) gm = 12;
-  var day = gd - sal[gm - 1];
-  if (gm > 2 && (((gy % 4 == 0 && gy % 100 != 0) || gy % 400 == 0))) day--;
-  return [gy, gm, day];
+  return [gy, gm, gd];
 }
 
-bool isJalaliLeap(int jy) {
-  final g1 = DateTime(j2g(jy, 1, 1)[0], j2g(jy, 1, 1)[1], j2g(jy, 1, 1)[2]);
-  final g2 = DateTime(j2g(jy + 1, 1, 1)[0], j2g(jy + 1, 1, 1)[1], j2g(jy + 1, 1, 1)[2]);
-  return g2.difference(g1).inDays == 366;
+int jmLen(int y, int m) {
+  if (m <= 6) return 31;
+  if (m <= 11) return 30;
+  final g = j2g(y, 12, 30);
+  final b = g2j(g[0], g[1], g[2]);
+  return (b[0] == y && b[1] == 12 && b[2] == 30) ? 30 : 29;
 }
 
-int jalaliMonthLength(int y, int m) =>
-    m <= 6 ? 31 : (m <= 11 ? 30 : (isJalaliLeap(y) ? 30 : 29));
-
-/* -------------------- Persistent data / migration -------------------- */
-
-class Store {
-  static List<Map> tasks = [];
-  static List<Map> events = [];
-  static List<Map> txs = [];
-  static List<Map> goals = [];
-  static List<Map> habits = [];
-  static List<Map> accounts = [];
-  static List<Map> budgets = [];
-  static List<Map> notes = [];
-
-  static const schema = 2;
-
-  static List<Map> readList(String key) {
-    try {
-      final raw = prefs.getString(key);
-      if (raw == null) return [];
-      return (jsonDecode(raw) as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static void load() {
-    tasks = readList('tasks');
-    events = readList('events');
-    txs = readList('txs');
-    goals = readList('goals');
-    habits = readList('habits');
-    accounts = readList('accounts');
-    budgets = readList('budgets');
-    notes = readList('notes');
-
-    // Migration is deliberately additive: old keys are never deleted.
-    // Existing tasks/events/transactions remain intact when the app is updated.
-    for (final e in events) {
-      e['repeat'] ??= 'weekly';
-      e['color'] ??= 0;
-      e['kind'] ??= 'برنامه';
-    }
-    for (final x in txs) {
-      x['id'] ??= DateTime.now().microsecondsSinceEpoch.toString();
-      x['accountId'] ??= 'cash';
-      x['note'] ??= '';
-    }
-    if (!prefs.containsKey('calendarMode')) prefs.setString('calendarMode', 'jalali');
-    if (!prefs.containsKey('currency')) prefs.setString('currency', 'تومان');
-    if (!prefs.containsKey('schemaVersion')) prefs.setInt('schemaVersion', schema);
-    save();
-  }
-
-  static Future<void> save() async {
-    await prefs.setString('tasks', jsonEncode(tasks));
-    await prefs.setString('events', jsonEncode(events));
-    await prefs.setString('txs', jsonEncode(txs));
-    await prefs.setString('goals', jsonEncode(goals));
-    await prefs.setString('habits', jsonEncode(habits));
-    await prefs.setString('accounts', jsonEncode(accounts));
-    await prefs.setString('budgets', jsonEncode(budgets));
-    await prefs.setString('notes', jsonEncode(notes));
-    await prefs.setInt('schemaVersion', schema);
-  }
+DateTime jDate(int y, int m, int d) {
+  final g = j2g(y, m, d);
+  return DateTime(g[0], g[1], g[2]);
 }
 
-/* -------------------- Notifications -------------------- */
-
-const notifDetails = NotificationDetails(
-  android: AndroidNotificationDetails(
-    'planner_events',
-    'یادآوری برنامه',
-    channelDescription: 'یادآوری کلاس‌ها، کارها و رویدادهای برنامه‌ریز',
-    importance: Importance.max,
-    priority: Priority.high,
-  ),
-);
-
-Future<void> scheduleAt(int id, String title, String body, DateTime date) async {
-  final t = tz.TZDateTime.from(date, tz.local);
-  if (!t.isAfter(tz.TZDateTime.now(tz.local))) return;
-  await notif.zonedSchedule(
-    id, title, body, t, notifDetails,
-    androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-    uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-    matchDateTimeComponents: null,
-  );
+String fd(String iso) {
+  if (!jal) return iso.substring(0, 10);
+  final p = iso.substring(0, 10).split('-').map(int.parse).toList();
+  final j = g2j(p[0], p[1], p[2]);
+  return '${j[0]}/${j[1].toString().padLeft(2, '0')}/${j[2].toString().padLeft(2, '0')}';
 }
 
-int eventNotifId(Map e) => (e['id'] is int ? e['id'] as int : int.tryParse('${e['id']}') ?? 1) + 100000;
+// تاریخ بلند: «شنبه 7 مهر 1405»
+String fdl(DateTime d) {
+  if (!jal) return ds(d);
+  final j = g2j(d.year, d.month, d.day);
+  return '${wdn[d.weekday]} ${j[2]} ${jmn[j[1] - 1]} ${j[0]}';
+}
 
-Future<void> scheduleEvent(Map e) async {
-  await notif.cancel(eventNotifId(e));
-  final wd = e['wd'] as int?;
-  final start = e['s'] as int? ?? 0;
-  if (wd == null) return;
-  final now = tz.TZDateTime.now(tz.local);
-  var candidate = tz.TZDateTime(tz.local, now.year, now.month, now.day);
-  while (candidate.weekday != wd || !candidate.isAfter(now)) {
-    candidate = candidate.add(const Duration(days: 1));
+String monthStart(DateTime now) {
+  if (!jal) return ds(DateTime(now.year, now.month));
+  final j = g2j(now.year, now.month, now.day);
+  return ds(jDate(j[0], j[1], 1));
+}
+
+// شبکه‌ی ماه شمسی (هم در انتخاب تاریخ و هم در تقویم برنامه)
+Widget monthGrid(BuildContext c, int jy, int jm,
+    {DateTime? sel, int Function(DateTime)? mark, bool Function(DateTime)? ok, required void Function(DateTime) onTap}) {
+  final cs = Theme.of(c).colorScheme;
+  final first = jDate(jy, jm, 1);
+  final off = (first.weekday + 1) % 7;
+  final today = DateTime.now();
+  final cells = <Widget>[for (var i = 0; i < off; i++) const SizedBox()];
+  for (var d = 1; d <= jmLen(jy, jm); d++) {
+    final dt = jDate(jy, jm, d);
+    final enabled = ok?.call(dt) ?? true;
+    final isSel = sel != null && sameDay(dt, sel);
+    final isToday = sameDay(dt, today);
+    final m = mark?.call(dt) ?? 0;
+    final fg = isSel ? cs.onPrimary : (!enabled ? cs.outline.withOpacity(.5) : (dt.weekday == 5 ? Colors.red : null));
+    cells.add(InkWell(
+        customBorder: const CircleBorder(),
+        onTap: enabled ? () => onTap(dt) : null,
+        child: Container(
+            margin: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isSel ? cs.primary : null,
+                border: isToday && !isSel ? Border.all(color: cs.primary) : null),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Text('$d', style: TextStyle(color: fg, fontWeight: isToday ? FontWeight.bold : null)),
+              if (m > 0)
+                Container(
+                    width: 5,
+                    height: 5,
+                    margin: const EdgeInsets.only(top: 2),
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: isSel ? cs.onPrimary : cs.tertiary)),
+            ]))));
   }
-  candidate = candidate.add(Duration(minutes: start - candidate.hour * 60 - candidate.minute));
-  if (candidate.isAfter(now)) {
-    await notif.zonedSchedule(
-      eventNotifId(e),
-      e['t'] ?? 'رویداد',
-      'شروع تا ۱۰ دقیقه دیگر',
-      candidate.subtract(const Duration(minutes: 10)),
-      notifDetails,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+  return Column(children: [
+    Row(children: [
+      for (final s in ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج'])
+        Expanded(child: Center(child: Text(s, style: TextStyle(color: s == 'ج' ? Colors.red : cs.outline, fontSize: 12))))
+    ]),
+    const SizedBox(height: 4),
+    GridView.count(
+        crossAxisCount: 7,
+        shrinkWrap: true,
+        childAspectRatio: 1.1,
+        physics: const NeverScrollableScrollPhysics(),
+        children: cells),
+  ]);
+}
+
+Future<DateTime?> pickDate(BuildContext c, {DateTime? initial, DateTime? first, DateTime? last, String? help}) {
+  final f = first ?? DateTime(2020), l = last ?? DateTime(2045);
+  var i = initial ?? DateTime.now();
+  if (i.isBefore(f)) i = f;
+  if (i.isAfter(l)) i = l;
+  if (!jal) return showDatePicker(context: c, initialDate: i, firstDate: f, lastDate: l, helpText: help);
+  return showDialog<DateTime>(context: c, builder: (_) => _JPick(i, f, l, help));
+}
+
+class _JPick extends StatefulWidget {
+  final DateTime i, f, l;
+  final String? help;
+  const _JPick(this.i, this.f, this.l, this.help);
+  @override
+  State<_JPick> createState() => _JPickS();
+}
+
+class _JPickS extends State<_JPick> {
+  late int y, m;
+  late DateTime sel;
+  @override
+  void initState() {
+    super.initState();
+    sel = DateTime(widget.i.year, widget.i.month, widget.i.day);
+    final j = g2j(sel.year, sel.month, sel.day);
+    y = j[0];
+    m = j[1];
+  }
+
+  void go(int d) => setState(() {
+        m += d;
+        if (m > 12) {
+          m = 1;
+          y++;
+        }
+        if (m < 1) {
+          m = 12;
+          y--;
+        }
+      });
+
+  @override
+  Widget build(BuildContext c) {
+    final f = DateTime(widget.f.year, widget.f.month, widget.f.day), l = DateTime(widget.l.year, widget.l.month, widget.l.day);
+    final now = DateTime.now(), today = DateTime(now.year, now.month, now.day);
+    return AlertDialog(
+      title: Text(widget.help ?? 'انتخاب تاریخ', style: const TextStyle(fontSize: 15)),
+      content: SizedBox(
+          width: 330,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              IconButton(icon: const Icon(Icons.keyboard_double_arrow_right), onPressed: () => setState(() => y--)),
+              IconButton(icon: const Icon(Icons.chevron_right), onPressed: () => go(-1)),
+              Expanded(child: Center(child: Text('${jmn[m - 1]} $y', style: const TextStyle(fontWeight: FontWeight.bold)))),
+              IconButton(icon: const Icon(Icons.chevron_left), onPressed: () => go(1)),
+              IconButton(icon: const Icon(Icons.keyboard_double_arrow_left), onPressed: () => setState(() => y++)),
+            ]),
+            monthGrid(c, y, m,
+                sel: sel,
+                ok: (d) => !d.isBefore(f) && !d.isAfter(l),
+                onTap: (d) => Navigator.pop(c, d)),
+          ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c), child: const Text('انصراف')),
+        if (!today.isBefore(f) && !today.isAfter(l)) TextButton(onPressed: () => Navigator.pop(c, today), child: const Text('امروز')),
+      ],
     );
   }
 }
 
-/* -------------------- App -------------------- */
+// ───────────────────────── داده‌ها ─────────────────────────
+class D {
+  static List<Map> tasks = [], events = [], txs = [];
+  static List<String> cats = [];
+  static const defCats = ['غذا', 'حمل‌ونقل', 'خرید', 'قبوض', 'کار', 'سایر'];
+
+  static void load() {
+    List<Map> r(String k) => (jsonDecode(prefs.getString(k) ?? '[]') as List).cast<Map>();
+    tasks = r('tasks');
+    events = r('events');
+    txs = r('txs');
+    final c = jsonDecode(prefs.getString('cats') ?? 'null');
+    cats = c is List ? c.cast<String>() : List.of(defCats);
+    if (!cats.contains('سایر')) cats.add('سایر');
+    // ── مهاجرت از نسخه‌های قبل: فیلدهای جدید با مقدار پیش‌فرض اضافه می‌شوند و هیچ دیتایی از بین نمی‌رود ──
+    var i = 0;
+    for (final k in tasks) {
+      k['subs'] ??= [];
+      k['star'] ??= false;
+      k['id'] ??= DateTime.now().millisecondsSinceEpoch ~/ 1000 + i++;
+    }
+    for (final x in txs) {
+      x['id'] ??= DateTime.now().microsecondsSinceEpoch + i++;
+    }
+    prefs.setInt('ver', kVer);
+  }
+
+  static void save() {
+    prefs.setString('tasks', jsonEncode(tasks));
+    prefs.setString('events', jsonEncode(events));
+    prefs.setString('txs', jsonEncode(txs));
+    prefs.setString('cats', jsonEncode(cats));
+  }
+
+  static String backup() => jsonEncode({
+        'ver': kVer,
+        'tasks': tasks,
+        'events': events,
+        'txs': txs,
+        'cats': cats,
+        'clr': prefs.getInt('clr') ?? 0,
+        'tm': prefs.getInt('tm') ?? 0,
+        'jal': jal,
+        'hope': prefs.getInt('hope') ?? -1
+      });
+
+  static Future<bool> restore(String s) async {
+    try {
+      final m = jsonDecode(s) as Map;
+      final t = m['tasks'] as List, e = m['events'] as List, x = m['txs'] as List;
+      prefs.setString('tasks', jsonEncode(t));
+      prefs.setString('events', jsonEncode(e));
+      prefs.setString('txs', jsonEncode(x));
+      if (m['cats'] is List) prefs.setString('cats', jsonEncode(m['cats']));
+      if (m['clr'] is int) prefs.setInt('clr', m['clr']);
+      if (m['tm'] is int) prefs.setInt('tm', m['tm']);
+      if (m['jal'] is bool) {
+        jal = m['jal'];
+        prefs.setBool('jal', jal);
+      }
+      if (m['hope'] is int) prefs.setInt('hope', m['hope']);
+      load();
+      look.value++;
+      await scheduleAll();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+// ───────────────────────── اعلان‌ها ─────────────────────────
+const nd = NotificationDetails(
+    android: AndroidNotificationDetails('ev', 'یادآوری برنامه', importance: Importance.max, priority: Priority.high));
+
+// اول زنگ دقیق؛ اگر اندروید اجازه نداد، زنگ تقریبی. هیچ‌وقت خطا به بیرون پرتاب نمی‌شود
+// (علت مشکل «باید صفحه رو عوض کنم» و «پیام امیدبخش کار نمی‌کنه» همین خطای اجازه‌ی زنگ دقیق بود)
+Future<bool> zs(int id, String t, String b, tz.TZDateTime w, {bool weekly = true}) async {
+  for (final mode in [AndroidScheduleMode.exactAllowWhileIdle, AndroidScheduleMode.inexactAllowWhileIdle]) {
+    try {
+      await notif.zonedSchedule(id, t, b, w, nd,
+          androidScheduleMode: mode,
+          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+          matchDateTimeComponents: weekly ? DateTimeComponents.dayOfWeekAndTime : null);
+      return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+tz.TZDateTime nextAt(int wd, int m) {
+  final now = tz.TZDateTime.now(tz.local);
+  var t = tz.TZDateTime(tz.local, now.year, now.month, now.day).add(Duration(minutes: m));
+  while (t.weekday != wd || !t.isAfter(now)) {
+    t = t.add(const Duration(days: 1));
+  }
+  return t;
+}
+
+Future<bool> schedule(Map e) {
+  var s = (e['s'] as int) - 10, wd = e['wd'] as int;
+  if (s < 0) {
+    s += 1440;
+    wd = wd == 1 ? 7 : wd - 1;
+  }
+  return zs(e['id'], e['t'], 'شروع تا ۱۰ دقیقه‌ی دیگر', nextAt(wd, s));
+}
+
+Future<void> scheduleTask(Map k) async {
+  if (k['r'] == null || k['done'] == true) return;
+  final t = tz.TZDateTime.from(DateTime.parse(k['r']), tz.local);
+  if (t.isAfter(tz.TZDateTime.now(tz.local))) await zs(k['id'], 'یادآوری: ${k['t']}', 'زمانش رسیده', t, weekly: false);
+}
+
+Future<bool> scheduleHope(int m) async {
+  var ok = true;
+  for (var i = 1; i <= 7; i++) {
+    try {
+      await notif.cancel(900000 + i);
+    } catch (_) {}
+    if (m >= 0) ok = await zs(900000 + i, 'یه پیام برای تو', hope[i - 1], nextAt(i, m)) && ok;
+  }
+  return ok;
+}
+
+// هر بار که برنامه باز می‌شود همه‌ی یادآورها دوباره ثبت می‌شوند (اگر سیستم پاکشان کرده باشد برمی‌گردند)
+Future<void> scheduleAll() async {
+  try {
+    final today = ds(DateTime.now());
+    for (final e in D.events) {
+      if ((e['to'] as String).compareTo(today) < 0) {
+        await notif.cancel(e['id']);
+      } else {
+        await schedule(e);
+      }
+    }
+    for (final k in D.tasks) {
+      await scheduleTask(k);
+    }
+    final h = prefs.getInt('hope') ?? -1;
+    if (h >= 0) await scheduleHope(h);
+  } catch (_) {}
+}
+
+Future<void> askPerms() async {
+  final a = notif.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+  try {
+    await a?.requestNotificationsPermission();
+    await a?.requestExactAlarmsPermission();
+  } catch (_) {}
+  await scheduleAll();
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   tzd.initializeTimeZones();
   tz.setLocalLocation(tz.getLocation('Asia/Tehran'));
   prefs = await SharedPreferences.getInstance();
-
-  Store.load();
-
-  await notif.initialize(
-    const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
-  );
-  final android = notif.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-  await android?.requestNotificationsPermission();
-  await android?.requestExactAlarmsPermission();
-
-  runApp(const PlannerApp());
+  jal = prefs.getBool('jal') ?? true;
+  D.load();
+  await notif.initialize(const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+  try {
+    await notif.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.requestNotificationsPermission();
+  } catch (_) {}
+  runApp(const App());
+  scheduleAll();
 }
 
-class PlannerApp extends StatelessWidget {
-  const PlannerApp({super.key});
-
+class App extends StatelessWidget {
+  const App({super.key});
   @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<int>(
-      valueListenable: refresh,
-      builder: (_, __, ___) {
-        final seed = prefs.getInt('clr') ?? 0;
-        final dark = prefs.getString('theme') == 'dark';
+  Widget build(BuildContext c) => ValueListenableBuilder<int>(
+      valueListenable: look,
+      builder: (c, _, __) {
+        final p = pals[(prefs.getInt('clr') ?? 0).clamp(0, pals.length - 1)];
+        final tm = [ThemeMode.system, ThemeMode.light, ThemeMode.dark][(prefs.getInt('tm') ?? 0).clamp(0, 2)];
         return MaterialApp(
           debugShowCheckedModeBanner: false,
-          title: 'کُنج پلنر',
-          themeMode: dark ? ThemeMode.dark : ThemeMode.light,
-          theme: ThemeData(
-            useMaterial3: true,
-            colorSchemeSeed: colors[seed % colors.length],
-            fontFamily: 'sans',
-            scaffoldBackgroundColor: const Color(0xfff7f7f9),
-          ),
-          darkTheme: ThemeData(
-            useMaterial3: true,
-            colorSchemeSeed: colors[seed % colors.length],
-            brightness: Brightness.dark,
-          ),
-          builder: (_, child) => Directionality(
-            textDirection: TextDirection.rtl,
-            child: child!,
-          ),
+          theme: mk(p, Brightness.light),
+          darkTheme: mk(p, Brightness.dark),
+          themeMode: tm,
+          builder: (c, w) => Directionality(textDirection: TextDirection.rtl, child: w!),
           home: const Home(),
         );
-      },
+      });
+}
+
+// ───────────────────────── راهنما ─────────────────────────
+class _GP {
+  final IconData i;
+  final String t, b;
+  const _GP(this.i, this.t, this.b);
+}
+
+const _pages = [
+  _GP(Icons.waving_hand, 'خوش اومدی!',
+      'این برنامه سه بخش داره: کارها، برنامه‌ی هفتگی و مالی.\nاین راهنما هر بخش رو کوتاه توضیح می‌ده. هر وقت خواستی با دکمه‌ی ؟ بالای صفحه دوباره بازش کن.'),
+  _GP(Icons.checklist, 'کارها',
+      '• با دکمه‌ی + یک کار جدید بنویس. اگه خواستی چند «زیرمجموعه» هم براش اضافه کن.\n• ستاره‌ی کنار هر کار رو بزن تا مهم علامت بخوره و بالای لیست بمونه.\n• می‌تونی یه تاریخ و ساعت برای یادآوری بذاری.\n• کار رو با تیک انجام‌شده کن. با منوی ⋮ ویرایش یا زیرمجموعه اضافه کن.\n• کار رو به کنار بکش تا حذف بشه (چند ثانیه فرصت «بازگردانی» داری).\n• پایین صفحه گزارش امروز، هفته و ماه رو می‌بینی.'),
+  _GP(Icons.calendar_month, 'برنامه‌ی هفتگی و تقویم',
+      '• بالای صفحه تقویم شمسیه؛ روی هر روز بزنی برنامه‌ها و کارهای اون روز پایین نشون داده می‌شه. نقطه‌ی زیر عدد یعنی اون روز برنامه داری.\n• با + برنامه‌ی تکرارشونده (مثل کلاس) با روز هفته، ساعت شروع و پایان و تاریخ پایان ترم بساز.\n• ۱۰ دقیقه قبل از شروع بهت اعلان می‌آد.\n• روی هر برنامه بزنی ویرایشش می‌کنی و با آیکون سطل حذفش می‌کنی.'),
+  _GP(Icons.account_balance_wallet, 'مالی',
+      '• با + هزینه یا درآمد ثبت کن. مبلغ خودش هر سه رقم با نقطه جدا می‌شه تا خوندنش راحت باشه.\n• دسته رو انتخاب کن؛ با «مدیریت دسته‌ها» خودت دسته اضافه یا حذف کن.\n• روی هر تراکنش بزنی می‌تونی مبلغ، دسته و تاریخش رو اصلاح کنی. با آیکون سطل یا کشیدن حذف می‌شه.\n• بالای صفحه جمع امروز، هفته و ماه و بخش جستجو هست.'),
+  _GP(Icons.settings, 'تنظیمات',
+      'با آیکون چرخ‌دنده:\n• رنگ برنامه و حالت روشن/تیره (نارنجی با پس‌زمینه‌ی خاکستری تیره هم داریم)\n• نمایش تاریخ شمسی\n• پیام امیدبخش روزانه: ساعتش رو انتخاب کن. دکمه‌ی «ارسال آزمایشی» هم برای تست هست.\n• پشتیبان‌گیری: از اطلاعاتت کپی نگه دار و هر وقت خواستی بازیابی کن.'),
+  _GP(Icons.notifications_active, 'اجازه‌ها',
+      'برای اینکه یادآورها دقیق بیان، اجازه‌ی اعلان و «زنگ و یادآور دقیق» رو بده و برنامه رو از محدودیت باتری آزاد کن (بعضی گوشی‌ها برنامه‌ها رو می‌بندن).\n\nدکمه‌ی پایین اجازه‌ها رو درخواست می‌کنه.'),
+];
+
+class Guide extends StatefulWidget {
+  const Guide({super.key});
+  @override
+  State<Guide> createState() => _GuideS();
+}
+
+class _GuideS extends State<Guide> {
+  final pc = PageController();
+  int i = 0;
+  void done() {
+    prefs.setBool('guide', true);
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext c) {
+    final last = i == _pages.length - 1;
+    return Scaffold(
+      appBar: AppBar(title: const Text('راهنما'), actions: [TextButton(onPressed: done, child: const Text('رد کردن'))]),
+      body: Column(children: [
+        Expanded(
+            child: PageView(controller: pc, onPageChanged: (v) => setState(() => i = v), children: [
+          for (final p in _pages)
+            SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(children: [
+                  const SizedBox(height: 16),
+                  Icon(p.i, size: 72, color: Theme.of(c).colorScheme.primary),
+                  const SizedBox(height: 16),
+                  Text(p.t, style: Theme.of(c).textTheme.headlineSmall),
+                  const SizedBox(height: 16),
+                  Text(p.b, style: const TextStyle(fontSize: 16, height: 1.9)),
+                  if (p == _pages.last) ...[
+                    const SizedBox(height: 16),
+                    FilledButton.tonalIcon(
+                        onPressed: askPerms, icon: const Icon(Icons.verified_user), label: const Text('درخواست اجازه‌ها')),
+                  ]
+                ])),
+        ])),
+        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          for (var k = 0; k < _pages.length; k++)
+            Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: k == i ? Theme.of(c).colorScheme.primary : Theme.of(c).colorScheme.outlineVariant)),
+        ]),
+        Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(children: [
+              if (i > 0)
+                OutlinedButton(
+                    onPressed: () => pc.previousPage(duration: const Duration(milliseconds: 250), curve: Curves.easeOut),
+                    child: const Text('قبلی')),
+              const Spacer(),
+              FilledButton(
+                  onPressed: last ? done : () => pc.nextPage(duration: const Duration(milliseconds: 250), curve: Curves.easeOut),
+                  child: Text(last ? 'شروع' : 'بعدی')),
+            ])),
+      ]),
     );
   }
 }
 
+// ───────────────────────── صفحه‌ی اصلی ─────────────────────────
 class Home extends StatefulWidget {
   const Home({super.key});
   @override
-  State<Home> createState() => _HomeState();
+  State<Home> createState() => _H();
 }
 
-class _HomeState extends State<Home> {
-  int tab = 0;
-  String search = '';
+class _Sub {
+  final TextEditingController c;
+  bool done;
+  _Sub(String t, this.done) : c = TextEditingController(text: t);
+}
 
-  bool get jalali => prefs.getString('calendarMode') != 'gregorian';
-  String get currency => prefs.getString('currency') ?? 'تومان';
+class _H extends State<Home> {
+  int tab = 0, cy = 1400, cm = 1;
+  String q = '';
+  DateTime sel = DateTime.now();
 
-  void update() {
-    Store.save();
-    refresh.value++;
+  @override
+  void initState() {
+    super.initState();
+    sel = DateTime(sel.year, sel.month, sel.day);
+    final j = g2j(sel.year, sel.month, sel.day);
+    cy = j[0];
+    cm = j[1];
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!(prefs.getBool('guide') ?? false)) openGuide();
+    });
   }
 
-  String dateLabel(DateTime d) => formatDate(d, jalali);
+  void openGuide() => Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => const Guide()));
 
-  Future<String?> ask(String hint, [String init = '']) async {
+  void upd() {
+    D.save();
+    if (mounted) setState(() {});
+  }
+
+  void undo(String msg, VoidCallback back) {
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(content: Text(msg), action: SnackBarAction(label: 'بازگردانی', onPressed: back)));
+  }
+
+  void toast(String msg) {
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<String?> ask(String hint, [String init = '']) {
     final c = TextEditingController(text: init);
     return showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(hint),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          textDirection: TextDirection.rtl,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
-          onSubmitted: (v) => Navigator.pop(context, v),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('لغو')),
-          FilledButton(onPressed: () => Navigator.pop(context, c.text), child: const Text('ثبت')),
-        ],
-      ),
-    );
+        context: context,
+        builder: (_) => AlertDialog(
+              content: TextField(
+                  controller: c,
+                  autofocus: true,
+                  decoration: InputDecoration(hintText: hint),
+                  onSubmitted: (v) => Navigator.pop(context, v)),
+              actions: [TextButton(onPressed: () => Navigator.pop(context, c.text), child: const Text('ثبت'))],
+            ));
   }
 
-  Future<TimeOfDay?> timePick({TimeOfDay? initial}) =>
-      showTimePicker(context: context, initialTime: initial ?? TimeOfDay.now());
-
-  Future<DateTime?> datePick({DateTime? initial}) async {
-    final d = initial ?? DateTime.now();
-    return showDialog<DateTime>(
-      context: context,
-      builder: (_) => CalendarDialog(initial: d, jalali: jalali),
-    );
-  }
-
-  Future<void> addTask() async {
-    final title = await ask('کار جدید');
-    if (title == null || title.trim().isEmpty) return;
-    final date = await datePick();
-    if (date == null) return;
-    final time = await timePick();
-    final task = {
-      'id': DateTime.now().microsecondsSinceEpoch,
-      't': title.trim(),
-      'done': false,
-      'priority': 'medium',
-      'r': time == null ? null : DateTime(date.year, date.month, date.day, time.hour, time.minute).toIso8601String(),
-    };
-    Store.tasks.add(task);
-    if (time != null) {
-      await scheduleAt(task['id'] as int, 'یادآوری: ${task['t']}', 'زمان انجام کار رسیده', DateTime(date.year, date.month, date.day, time.hour, time.minute));
-    }
-    update();
-  }
-
-  Future<void> addEvent([Map? old]) async {
-    final title = await ask('عنوان برنامه / کلاس', old?['t'] ?? '');
-    if (title == null || title.trim().isEmpty) return;
-
-    final kind = await showDialog<String>(
-      context: context,
-      builder: (_) => SimpleDialog(
-        title: const Text('نوع برنامه'),
-        children: ['کلاس', 'جلسه', 'ورزش', 'کار', 'شخصی', 'سایر']
-            .map((x) => SimpleDialogOption(onPressed: () => Navigator.pop(context, x), child: Text(x)))
-            .toList(),
-      ),
-    );
-    if (kind == null) return;
-
-    final weekday = await showDialog<int>(
-      context: context,
-      builder: (_) => SimpleDialog(
-        title: const Text('روز هفته'),
-        children: [
-          for (var i = 0; i < 7; i++)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(_, weekdayNumbers[i]),
-              child: Text(weekdaysFa[i]),
-            ),
-        ],
-      ),
-    );
-    if (weekday == null) return;
-
-    final start = await timePick(
-      initial: old == null ? const TimeOfDay(hour: 8, minute: 0) : TimeOfDay(hour: (old['s'] as int) ~/ 60, minute: (old['s'] as int) % 60),
-    );
-    if (start == null) return;
-    final end = await timePick(
-      initial: old == null ? const TimeOfDay(hour: 10, minute: 0) : TimeOfDay(hour: (old['e'] as int) ~/ 60, minute: (old['e'] as int) % 60),
-    );
-    if (end == null) return;
-
-    final until = await datePick(initial: old == null ? DateTime.now().add(const Duration(days: 120)) : DateTime.parse(old['to']));
-    if (until == null) return;
-
-    if (old != null) {
-      await notif.cancel(eventNotifId(old));
-      Store.events.remove(old);
-    }
-
-    final e = {
-      'id': old?['id'] ?? DateTime.now().microsecondsSinceEpoch,
-      't': title.trim(),
-      'kind': kind,
-      'wd': weekday,
-      's': minutesOf(start),
-      'e': minutesOf(end),
-      'from': old?['from'] ?? ds(DateTime.now()),
-      'to': ds(until),
-      'repeat': 'weekly',
-      'color': old?['color'] ?? 0,
-    };
-    Store.events.add(e);
-    await scheduleEvent(e);
-    update();
-  }
-
-  Future<void> addTransaction([Map? old]) async {
-    final amount = TextEditingController(text: old == null ? '' : '${old['a']}');
-    final title = TextEditingController(text: old?['t'] ?? '');
-    final note = TextEditingController(text: old?['note'] ?? '');
-    bool income = old?['inc'] == true;
-    String category = old?['c'] ?? 'سایر';
-
-    final cats = ['غذا','حمل‌ونقل','خرید','قبوض','کار','سلامت','آموزش','تفریح','خانه','سایر'];
-
-    await showModalBottomSheet(
+  // ── تنظیمات ──
+  void settings() => showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, set) => Padding(
-          padding: EdgeInsets.fromLTRB(16, 8, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
-          child: SingleChildScrollView(
-            child: Column(
-              children: [
-                const Text('تراکنش مالی', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                TextField(controller: title, decoration: const InputDecoration(labelText: 'عنوان', border: OutlineInputBorder())),
-                const SizedBox(height: 10),
-                TextField(controller: amount, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'مبلغ ($currency)', border: const OutlineInputBorder())),
-                const SizedBox(height: 10),
-                TextField(controller: note, maxLines: 2, decoration: const InputDecoration(labelText: 'یادداشت', border: OutlineInputBorder())),
-                const SizedBox(height: 10),
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(value: false, label: Text('هزینه'), icon: Icon(Icons.arrow_upward)),
-                    ButtonSegment(value: true, label: Text('درآمد'), icon: Icon(Icons.arrow_downward)),
-                  ],
-                  selected: {income},
-                  onSelectionChanged: (s) => set(() => income = s.first),
-                ),
-                const SizedBox(height: 10),
-                Align(alignment: Alignment.centerRight, child: Text('دسته‌بندی', style: Theme.of(ctx).textTheme.titleSmall)),
-                Wrap(
-                  spacing: 6,
-                  children: [
-                    for (final c in cats)
-                      ChoiceChip(label: Text(c), selected: category == c, onSelected: (_) => set(() => category = c)),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                FilledButton.icon(
-                  onPressed: () {
-                    final value = int.tryParse(digits(amount.text));
-                    if (value == null || value <= 0) return;
-                    if (old != null) Store.txs.remove(old);
-                    Store.txs.add({
-                      'id': old?['id'] ?? DateTime.now().microsecondsSinceEpoch.toString(),
-                      'a': value,
-                      'inc': income,
-                      'c': category,
-                      't': title.text.trim(),
-                      'note': note.text.trim(),
-                      'd': old?['d'] ?? ds(DateTime.now()),
-                      'accountId': old?['accountId'] ?? 'cash',
-                    });
-                    Navigator.pop(ctx);
-                    update();
-                  },
-                  icon: const Icon(Icons.save_outlined),
-                  label: const Text('ذخیره تراکنش'),
-                ),
+      builder: (_) => StatefulBuilder(builder: (ctx, set) {
+            final hp = prefs.getInt('hope') ?? -1, cur = prefs.getInt('clr') ?? 0;
+            return SafeArea(
+                child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('حالت نمایش', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      SegmentedButton<int>(
+                          segments: const [
+                            ButtonSegment(value: 0, label: Text('خودکار')),
+                            ButtonSegment(value: 1, label: Text('روشن')),
+                            ButtonSegment(value: 2, label: Text('تیره')),
+                          ],
+                          selected: {prefs.getInt('tm') ?? 0},
+                          onSelectionChanged: (s) {
+                            prefs.setInt('tm', s.first);
+                            look.value++;
+                            set(() {});
+                          }),
+                      const SizedBox(height: 16),
+                      const Text('رنگ برنامه', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      Wrap(spacing: 10, runSpacing: 10, children: [
+                        for (var i = 0; i < pals.length; i++)
+                          GestureDetector(
+                              onTap: () {
+                                prefs.setInt('clr', i);
+                                look.value++;
+                                set(() {});
+                              },
+                              child: Tooltip(
+                                  message: pals[i].name,
+                                  child: CircleAvatar(
+                                      backgroundColor: pals[i].c,
+                                      radius: 18,
+                                      child: cur == i ? const Icon(Icons.check, color: Colors.white, size: 18) : null)))
+                      ]),
+                      SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('نمایش تاریخ شمسی'),
+                          value: jal,
+                          onChanged: (v) {
+                            jal = v;
+                            prefs.setBool('jal', v);
+                            set(() {});
+                            setState(() {});
+                          }),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('پیام امیدبخش روزانه'),
+                          subtitle: Text(hp < 0 ? 'خاموش (برای روشن کردن بزن)' : hm(hp)),
+                          onTap: () async {
+                            final t = await showTimePicker(
+                                context: ctx,
+                                initialTime: hp < 0 ? const TimeOfDay(hour: 9, minute: 0) : TimeOfDay(hour: hp ~/ 60, minute: hp % 60),
+                                helpText: 'ساعت پیام');
+                            if (t == null) return;
+                            final m = t.hour * 60 + t.minute;
+                            prefs.setInt('hope', m);
+                            final ok = await scheduleHope(m);
+                            if (!ok) toast('ثبت پیام ناموفق بود؛ اجازه‌ی اعلان را بررسی کن.');
+                            set(() {});
+                          },
+                          trailing: TextButton(
+                              onPressed: () async {
+                                prefs.setInt('hope', -1);
+                                await scheduleHope(-1);
+                                set(() {});
+                              },
+                              child: const Text('خاموش'))),
+                      Wrap(spacing: 8, children: [
+                        OutlinedButton.icon(
+                            icon: const Icon(Icons.notifications),
+                            label: const Text('ارسال آزمایشی'),
+                            onPressed: () => notif.show(1, 'یه پیام برای تو', hope[DateTime.now().weekday - 1], nd)),
+                        OutlinedButton.icon(
+                            icon: const Icon(Icons.verified_user),
+                            label: const Text('اجازه‌ی زنگ دقیق'),
+                            onPressed: askPerms),
+                      ]),
+                      const Divider(height: 28),
+                      const Text('پشتیبان‌گیری', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.copy),
+                          title: const Text('کپی پشتیبان همه‌ی اطلاعات'),
+                          subtitle: const Text('متن کپی‌شده را جایی امن (مثلاً پیام‌های ذخیره‌شده) نگه دار'),
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: D.backup()));
+                            toast('پشتیبان کپی شد');
+                          }),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.restore),
+                          title: const Text('بازیابی از پشتیبان'),
+                          onTap: () async {
+                            Navigator.pop(ctx);
+                            restoreDlg();
+                          }),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.help_outline),
+                          title: const Text('راهنمای برنامه'),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            openGuide();
+                          }),
+                    ])));
+          }));
+
+  Future<void> restoreDlg() async {
+    final c = TextEditingController();
+    final txt = await showDialog<String>(
+        context: context,
+        builder: (_) => AlertDialog(
+              title: const Text('بازیابی'),
+              content: TextField(
+                  controller: c,
+                  maxLines: 6,
+                  decoration: const InputDecoration(hintText: 'متن پشتیبان را اینجا بچسبان (اطلاعات فعلی جایگزین می‌شود)')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('انصراف')),
+                TextButton(onPressed: () => Navigator.pop(context, c.text), child: const Text('بازیابی')),
               ],
-            ),
-          ),
-        ),
-      ),
-    );
+            ));
+    if (txt == null || txt.trim().isEmpty) return;
+    final ok = await D.restore(txt.trim());
+    toast(ok ? 'بازیابی انجام شد' : 'متن پشتیبان معتبر نیست');
+    if (mounted) setState(() {});
   }
 
-  Future<void> addGoal() async {
-    final title = await ask('هدف جدید');
-    if (title == null || title.trim().isEmpty) return;
-    final deadline = await datePick();
-    if (deadline == null) return;
-    Store.goals.add({
-      'id': DateTime.now().microsecondsSinceEpoch,
-      't': title.trim(),
-      'progress': 0,
-      'deadline': ds(deadline),
+  // ── کارها ──
+  void delTask(Map k) {
+    final i = D.tasks.indexOf(k);
+    notif.cancel(k['id'] ?? 0);
+    D.tasks.remove(k);
+    upd();
+    undo('کار حذف شد', () {
+      D.tasks.insert(i.clamp(0, D.tasks.length), k);
+      scheduleTask(k);
+      upd();
     });
-    update();
   }
 
-  Future<void> addHabit() async {
-    final title = await ask('عادت جدید');
-    if (title == null || title.trim().isEmpty) return;
-    Store.habits.add({
-      'id': DateTime.now().microsecondsSinceEpoch,
-      't': title.trim(),
-      'days': <String>[],
-    });
-    update();
+  void toggle(Map k) {
+    final d = k['done'] == true;
+    k['done'] = !d;
+    k['doneAt'] = d ? null : ds(DateTime.now());
+    if (d) {
+      scheduleTask(k);
+    } else {
+      notif.cancel(k['id'] ?? 0);
+    }
+    upd();
   }
 
-  Widget homeTab() {
-    final today = ds(DateTime.now());
-    final open = Store.tasks.where((x) => x['done'] != true).length;
-    final doneToday = Store.tasks.where((x) => x['done'] == true && x['doneAt'] == today).length;
-    final todayEvents = Store.events.where((e) => e['wd'] == DateTime.now().weekday && today.compareTo(e['from']) >= 0 && today.compareTo(e['to']) <= 0).toList()
-      ..sort((a,b) => (a['s'] as int).compareTo(b['s'] as int));
-
-    final total = open + doneToday;
-    final progress = total == 0 ? 0.0 : doneToday / total;
-
-    return RefreshIndicator(
-      onRefresh: () async => update(),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(14, 16, 14, 100),
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text('امروز، ${weekdaysFa[(DateTime.now().weekday + 1) % 7]}',
-                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-              ),
-              IconButton(onPressed: () => showSettings(), icon: const Icon(Icons.tune_rounded)),
-            ],
-          ),
-          Text(formatDate(DateTime.now(), jalali), style: TextStyle(color: Theme.of(context).colorScheme.primary)),
-          const SizedBox(height: 16),
-          Card(
-            elevation: 0,
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('امروز چه خبر؟', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 12),
-                  LinearProgressIndicator(value: progress, minHeight: 8, borderRadius: BorderRadius.circular(20)),
-                  const SizedBox(height: 10),
-                  Text('$doneToday انجام شده • $open کار باز'),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (todayEvents.isNotEmpty)
-            Card(
-              elevation: 0,
-              child: Column(
-                children: [
-                  const ListTile(title: Text('برنامه امروز', style: TextStyle(fontWeight: FontWeight.bold)), leading: Icon(Icons.event_available)),
-                  for (final e in todayEvents)
-                    ListTile(
-                      leading: CircleAvatar(child: Text('${e['s'] ~/ 60}')),
-                      title: Text(e['t']),
-                      subtitle: Text('${hm(e['s'])} تا ${hm(e['e'])} • ${e['kind']}'),
-                    ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 12),
-          Card(
-            elevation: 0,
-            child: ListTile(
-              leading: const Icon(Icons.account_balance_wallet_outlined),
-              title: const Text('خلاصه مالی امروز'),
-              subtitle: Text(financeSummary(DateTime.now())),
-              onTap: () => setState(() => tab = 3),
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (Store.goals.isNotEmpty)
-            Card(
-              elevation: 0,
-              child: Column(
-                children: [
-                  const ListTile(title: Text('هدف‌های در مسیر', style: TextStyle(fontWeight: FontWeight.bold)), leading: Icon(Icons.flag_outlined)),
-                  for (final g in Store.goals.take(4))
-                    ListTile(
-                      title: Text(g['t']),
-                      subtitle: LinearProgressIndicator(value: ((g['progress'] ?? 0) as num) / 100, minHeight: 6),
-                      trailing: Text('${g['progress'] ?? 0}%'),
-                    ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
+  Future<void> addSub(Map k) async {
+    final s = await ask('زیرمجموعه‌ی جدید');
+    if (s == null || s.trim().isEmpty) return;
+    (k['subs'] as List).add({'t': s.trim(), 'done': false});
+    upd();
   }
 
-  String financeSummary(DateTime d) {
-    final day = ds(d);
-    final l = Store.txs.where((x) => x['d'] == day);
-    final income = l.where((x) => x['inc'] == true).fold<int>(0, (p,x) => p + (x['a'] as int));
-    final expense = l.where((x) => x['inc'] != true).fold<int>(0, (p,x) => p + (x['a'] as int));
-    return 'درآمد ${moneyText(income)} • هزینه ${moneyText(expense)} • مانده ${moneyText(income-expense)} $currency';
-  }
-
-  Widget tasksTab() {
-    final open = Store.tasks.where((x) => x['done'] != true).toList();
-    final done = Store.tasks.where((x) => x['done'] == true).toList().reversed.toList();
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
-      children: [
-        Card(
-          elevation: 0,
-          child: ListTile(
-            leading: const Icon(Icons.auto_awesome),
-            title: const Text('کارهای باز'),
-            subtitle: Text('${open.length} کار باقی مانده'),
-          ),
-        ),
-        for (final t in open) taskTile(t, false),
-        if (done.isNotEmpty) ...[
-          const Padding(padding: EdgeInsets.only(top: 16, bottom: 6), child: Text('انجام‌شده‌ها', style: TextStyle(fontWeight: FontWeight.bold))),
-          for (final t in done.take(20)) taskTile(t, true),
-        ],
-      ],
-    );
-  }
-
-  Widget taskTile(Map t, bool done) {
-    return Dismissible(
-      key: ValueKey(t['id']),
-      background: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(16)),
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        child: const Icon(Icons.delete, color: Colors.white),
-      ),
-      onDismissed: (_) {
-        notif.cancel(t['id'] is int ? t['id'] : 0);
-        Store.tasks.remove(t);
-        update();
-      },
-      child: Card(
-        elevation: 0,
-        margin: const EdgeInsets.only(bottom: 8),
-        child: CheckboxListTile(
-          value: done,
-          onChanged: (_) {
-            t['done'] = !done;
-            t['doneAt'] = done ? null : ds(DateTime.now());
-            update();
-          },
-          title: Text(t['t'], style: done ? const TextStyle(decoration: TextDecoration.lineThrough) : null),
-          subtitle: t['r'] != null ? Text('⏰ ${formatDate(DateTime.parse(t['r']), jalali)}  ${t['r'].toString().substring(11,16)}') : const Text('بدون یادآوری'),
-          secondary: Icon(t['priority'] == 'high' ? Icons.priority_high : Icons.check_circle_outline),
-        ),
-      ),
-    );
-  }
-
-  Widget calendarTab() => PlannerCalendar(
-    jalali: jalali,
-    events: Store.events,
-    tasks: Store.tasks,
-    onAddEvent: addEvent,
-    onDeleteEvent: (e) async {
-      await notif.cancel(eventNotifId(e));
-      Store.events.remove(e);
-      update();
-    },
-  );
-
-  Widget goalsTab() {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
-      children: [
-        sectionHeader('هدف‌ها', Icons.flag_outlined, onAdd: addGoal),
-        for (final g in Store.goals)
-          Card(
-            elevation: 0,
-            child: ListTile(
-              title: Text(g['t']),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+  Future<void> taskSheet([Map? o]) async {
+    final title = TextEditingController(text: o?['t'] ?? '');
+    final subs = <_Sub>[for (final s in (o?['subs'] as List? ?? [])) _Sub(s['t'], s['done'] == true)];
+    DateTime? rem = o?['r'] != null ? DateTime.parse(o!['r']) : null;
+    var saved = false;
+    await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => StatefulBuilder(
+            builder: (ctx, set) => Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+                child: SingleChildScrollView(
+                    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  TextField(
+                      controller: title,
+                      autofocus: o == null,
+                      decoration: const InputDecoration(labelText: 'کار (یک قدم مشخص)')),
                   const SizedBox(height: 8),
-                  LinearProgressIndicator(value: ((g['progress'] ?? 0) as num) / 100),
-                  const SizedBox(height: 6),
-                  Text('مهلت: ${formatDate(DateTime.parse(g['deadline']), jalali)}'),
-                ],
-              ),
-              trailing: SizedBox(
-                width: 72,
-                child: DropdownButton<int>(
-                  value: (g['progress'] ?? 0) as int,
-                  isExpanded: true,
-                  items: [0,25,50,75,100].map((v) => DropdownMenuItem(value: v, child: Text('$v%'))).toList(),
-                  onChanged: (v) { if (v != null) { g['progress'] = v; update(); } },
-                ),
-              ),
-            ),
-          ),
-        const SizedBox(height: 16),
-        sectionHeader('عادت‌ها', Icons.repeat_rounded, onAdd: addHabit),
-        for (final h in Store.habits)
-          Card(
-            elevation: 0,
-            child: ListTile(
-              leading: const Icon(Icons.local_fire_department_outlined),
-              title: Text(h['t']),
-              subtitle: Text('روزهای ثبت‌شده: ${(h['days'] as List?)?.length ?? 0}'),
-              trailing: IconButton(
-                icon: const Icon(Icons.check_circle_outline),
-                onPressed: () {
-                  final list = List<String>.from(h['days'] ?? []);
-                  final d = ds(DateTime.now());
-                  if (!list.contains(d)) list.add(d);
-                  h['days'] = list;
-                  update();
-                },
-              ),
-            ),
-          ),
-      ],
-    );
+                  for (var i = 0; i < subs.length; i++)
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              controller: subs[i].c,
+                              decoration: InputDecoration(labelText: 'زیرمجموعه ${i + 1}', isDense: true))),
+                      IconButton(icon: const Icon(Icons.close), onPressed: () => set(() => subs.removeAt(i))),
+                    ]),
+                  Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: TextButton.icon(
+                          icon: const Icon(Icons.add),
+                          label: const Text('افزودن زیرمجموعه'),
+                          onPressed: () => set(() => subs.add(_Sub('', false))))),
+                  ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.alarm),
+                      title: Text(rem == null ? 'بدون یادآوری (برای افزودن بزن)' : '${fd(rem!.toIso8601String())}   ${hm(rem!.hour * 60 + rem!.minute)}'),
+                      trailing: rem == null ? null : IconButton(icon: const Icon(Icons.close), onPressed: () => set(() => rem = null)),
+                      onTap: () async {
+                        final now = DateTime.now();
+                        final d = await pickDate(ctx,
+                            initial: rem ?? now,
+                            first: now.subtract(const Duration(days: 1)),
+                            last: now.add(const Duration(days: 730)),
+                            help: 'روز یادآوری');
+                        if (d == null) return;
+                        final t = await showTimePicker(
+                            context: ctx,
+                            initialTime: rem != null ? TimeOfDay.fromDateTime(rem!) : TimeOfDay.now(),
+                            helpText: 'ساعت یادآوری');
+                        if (t == null) return;
+                        set(() => rem = DateTime(d.year, d.month, d.day, t.hour, t.minute));
+                      }),
+                  FilledButton(
+                      onPressed: () {
+                        if (title.text.trim().isEmpty) return;
+                        saved = true;
+                        Navigator.pop(ctx);
+                      },
+                      child: const Text('ثبت')),
+                ])))));
+    if (!saved) return;
+    final so = [
+      for (final s in subs)
+        if (s.c.text.trim().isNotEmpty) {'t': s.c.text.trim(), 'done': s.done}
+    ];
+    final Map k;
+    if (o == null) {
+      k = <String, dynamic>{'id': DateTime.now().millisecondsSinceEpoch ~/ 1000, 'done': false, 'star': false};
+      D.tasks.add(k);
+    } else {
+      k = o;
+      notif.cancel(k['id'] ?? 0);
+    }
+    k['t'] = title.text.trim();
+    k['subs'] = so;
+    if (rem != null) {
+      k['r'] = rem!.toIso8601String();
+    } else {
+      k.remove('r');
+    }
+    upd(); // اول ذخیره و نمایش؛ بعد زمان‌بندی اعلان
+    await scheduleTask(k);
   }
 
-  Widget sectionHeader(String title, IconData icon, {VoidCallback? onAdd}) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(icon),
-      title: Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
-      trailing: onAdd == null ? null : IconButton(onPressed: onAdd, icon: const Icon(Icons.add_circle_outline)),
-    );
-  }
+  Widget tasks() {
+    final now = DateTime.now(), t = ds(now), nowIso = now.toIso8601String();
+    final wk = ds(now.subtract(Duration(days: (now.weekday + 1) % 7)));
+    final mo = monthStart(now);
+    final ev = D.events.where((e) => e['wd'] == now.weekday && t.compareTo(e['from']) >= 0 && t.compareTo(e['to']) <= 0).toList()
+      ..sort(byStart);
+    final open = D.tasks.where((k) => k['done'] != true).toList()
+      ..sort((a, b) {
+        final s = (b['star'] == true ? 1 : 0) - (a['star'] == true ? 1 : 0);
+        return s != 0 ? s : (a['id'] as int).compareTo(b['id'] as int);
+      });
+    final done = D.tasks.where((k) => k['done'] == true && k['doneAt'] == t).toList();
 
-  Widget moneyTab() {
-    final now = DateTime.now();
-    int sum(bool income, String? from) {
-      final l = Store.txs.where((x) => x['inc'] == income && (from == null || (x['d'] as String).compareTo(from) >= 0));
-      return l.fold<int>(0, (p,x) => p + (x['a'] as int));
+    Widget tile(Map k) {
+      final d = k['done'] == true;
+      final subs = (k['subs'] as List).cast<Map>();
+      final sd = subs.where((s) => s['done'] == true).length;
+      final info = [
+        if (k['r'] != null) '⏰ ${fd(k['r'])}  ${(k['r'] as String).substring(11, 16)}',
+        if (subs.isNotEmpty) 'زیرمجموعه: $sd از ${subs.length}',
+      ].join('   •   ');
+      return Dismissible(
+          key: ObjectKey(k),
+          background: Container(color: Colors.red),
+          onDismissed: (_) => delTask(k),
+          child: Card(
+              child: Column(children: [
+            ListTile(
+                leading: Checkbox(value: d, onChanged: (_) => toggle(k)),
+                title: Text(k['t'], style: d ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
+                subtitle: info.isEmpty ? null : Text(info),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(
+                      tooltip: 'مهم',
+                      icon: Icon(k['star'] == true ? Icons.star : Icons.star_border, color: k['star'] == true ? Colors.amber : null),
+                      onPressed: () {
+                        k['star'] = k['star'] != true;
+                        upd();
+                      }),
+                  PopupMenuButton<String>(
+                      onSelected: (v) => v == 'e' ? taskSheet(k) : (v == 's' ? addSub(k) : delTask(k)),
+                      itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'e', child: Text('ویرایش')),
+                            PopupMenuItem(value: 's', child: Text('افزودن زیرمجموعه')),
+                            PopupMenuItem(value: 'd', child: Text('حذف')),
+                          ]),
+                ])),
+            for (final s in subs)
+              CheckboxListTile(
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: const EdgeInsets.only(right: 40, left: 16),
+                  value: s['done'] == true,
+                  title: Text(s['t'],
+                      style: s['done'] == true ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
+                  onChanged: (v) {
+                    s['done'] = v == true;
+                    upd();
+                  }),
+          ])));
     }
 
-    final income = sum(true, null);
-    final expense = sum(false, null);
-    final found = Store.txs.where((x) => '${x['t'] ?? ''} ${x['c'] ?? ''} ${x['note'] ?? ''}'.contains(search)).toList().reversed.toList();
+    Widget rep(String label, String from) {
+      final dn = D.tasks.where((k) => k['done'] == true && ((k['doneAt'] ?? '') as String).compareTo(from) >= 0).length;
+      final od = open.where((k) {
+        final r = k['r'] as String?;
+        return r != null && r.compareTo(nowIso) < 0 && r.substring(0, 10).compareTo(from) >= 0;
+      }).length;
+      return ListTile(dense: true, title: Text(label), trailing: Text('انجام‌شده $dn   |   عقب‌افتاده $od'));
+    }
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
-      children: [
-        TextField(
-          decoration: InputDecoration(
-            hintText: 'جستجو در تراکنش‌ها...',
-            prefixIcon: const Icon(Icons.search),
-            suffixIcon: search.isEmpty ? null : IconButton(onPressed: () => setState(() => search = ''), icon: const Icon(Icons.clear)),
-          ),
-          onChanged: (v) => setState(() => search = v.trim()),
-        ),
-        const SizedBox(height: 10),
-        Card(
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('مانده کل', style: TextStyle(fontSize: 14)),
-                const SizedBox(height: 4),
-                Text('${moneyText(income-expense)} $currency', style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w900)),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(child: _moneyMetric('درآمد', income, Icons.south_west)),
-                    Expanded(child: _moneyMetric('هزینه', expense, Icons.north_east)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        Card(
-          elevation: 0,
-          child: Column(
-            children: [
-              const ListTile(title: Text('بودجه‌بندی', style: TextStyle(fontWeight: FontWeight.bold)), leading: Icon(Icons.pie_chart_outline)),
-              for (final b in Store.budgets)
-                Builder(builder: (_) {
-                  final monthKey = ds(DateTime(now.year, now.month));
-                  final spent = Store.txs
-                      .where((x) => x['inc'] != true && x['c'] == b['c'] && (x['d'] as String).compareTo(monthKey) >= 0)
-                      .fold<int>(0, (p, x) => p + (x['a'] as int));
-                  final limit = (b['limit'] ?? 0) as int;
-                  final ratio = limit <= 0 ? 0.0 : (spent / limit).clamp(0.0, 1.0);
-                  return ListTile(
-                    title: Text(b['c']),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        LinearProgressIndicator(value: ratio, minHeight: 6),
-                        const SizedBox(height: 4),
-                        Text('${moneyText(spent)} از ${moneyText(limit)} این ماه'),
-                      ],
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () { Store.budgets.remove(b); update(); },
-                    ),
-                  );
-                }),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('افزودن بودجه'),
-                onTap: addBudget,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        const Text('تراکنش‌ها', style: TextStyle(fontWeight: FontWeight.bold)),
-        for (final x in found.take(100))
-          Card(
-            elevation: 0,
-            child: ListTile(
-              onTap: () => addTransaction(x),
-              leading: CircleAvatar(
-                child: Icon(x['inc'] == true ? Icons.south_west : Icons.north_east),
-              ),
-              title: Text((x['t'] ?? '') == '' ? x['c'] : x['t']),
-              subtitle: Text('${x['c']} • ${formatDate(DateTime.parse(x['d']), jalali)}'),
-              trailing: Text('${x['inc'] == true ? '+' : '-'}${moneyText(x['a'])}'),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _moneyMetric(String title, int value, IconData icon) {
-    return Row(children: [
-      Icon(icon, size: 18),
-      const SizedBox(width: 6),
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title, style: const TextStyle(fontSize: 12)),
-        Text(moneyText(value), style: const TextStyle(fontWeight: FontWeight.bold)),
-      ]),
+    return ListView(padding: const EdgeInsets.all(12), children: [
+      for (final e in ev)
+        Card(child: ListTile(leading: const Icon(Icons.schedule), title: Text(e['t']), subtitle: Text('${hm(e['s'])} – ${hm(e['e'])}'))),
+      const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('کارهای در انتظار', style: TextStyle(fontWeight: FontWeight.bold))),
+      for (final k in open) tile(k),
+      if (open.isEmpty) const Text('کاری نمونده. با دکمه‌ی + یک کار ثبت کن.'),
+      if (done.isNotEmpty)
+        const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('انجام‌شده‌ی امروز', style: TextStyle(fontWeight: FontWeight.bold))),
+      for (final k in done) tile(k),
+      const Divider(height: 32),
+      const Text('گزارش کارها', style: TextStyle(fontWeight: FontWeight.bold)),
+      Card(child: Column(children: [rep('امروز', t), rep('این هفته', wk), rep('این ماه', mo)])),
+      const SizedBox(height: 80),
     ]);
   }
 
-  Future<void> addBudget() async {
-    final category = await ask('دسته بودجه');
-    if (category == null || category.trim().isEmpty) return;
-    final amount = await ask('سقف بودجه');
-    final value = int.tryParse(digits(amount ?? ''));
-    if (value == null || value <= 0) return;
-    Store.budgets.add({'id': DateTime.now().microsecondsSinceEpoch, 'c': category.trim(), 'limit': value, 'spent': 0});
-    update();
+  // ── برنامه‌ی هفتگی و تقویم ──
+  void delEvent(Map e) {
+    notif.cancel(e['id']);
+    D.events.remove(e);
+    upd();
+    undo('برنامه حذف شد', () {
+      D.events.add(e);
+      schedule(e);
+      upd();
+    });
   }
 
-  Future<void> showSettings() async {
+  Future<void> addEvent([Map? o]) async {
+    final title = await ask('عنوان (مثلاً کلاس ...)', o?['t'] ?? '');
+    if (title == null || title.trim().isEmpty || !mounted) return;
+    final wd = await showDialog<int>(
+        context: context,
+        builder: (_) => SimpleDialog(title: const Text('روز هفته'), children: [
+              for (final d in wdo) SimpleDialogOption(onPressed: () => Navigator.pop(context, d), child: Text(wdn[d]!))
+            ]));
+    if (wd == null || !mounted) return;
+    final a = await showTimePicker(
+        context: context,
+        initialTime: o != null ? TimeOfDay(hour: o['s'] ~/ 60, minute: o['s'] % 60) : const TimeOfDay(hour: 8, minute: 0),
+        helpText: 'شروع');
+    if (a == null || !mounted) return;
+    final b = await showTimePicker(
+        context: context,
+        initialTime: o != null ? TimeOfDay(hour: o['e'] ~/ 60, minute: o['e'] % 60) : a.replacing(hour: (a.hour + 2) % 24),
+        helpText: 'پایان');
+    if (b == null || !mounted) return;
+    final now = DateTime.now();
+    final to = await pickDate(context,
+        initial: o != null ? DateTime.parse(o['to']) : now.add(const Duration(days: 112)),
+        first: DateTime(2020),
+        last: now.add(const Duration(days: 1100)),
+        help: 'پایان ترم');
+    if (to == null) return;
+    final e = {
+      'id': o?['id'] ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      't': title.trim(),
+      'wd': wd,
+      's': a.hour * 60 + a.minute,
+      'e': b.hour * 60 + b.minute,
+      'from': o?['from'] ?? ds(now),
+      'to': ds(to)
+    };
+    if (o != null) {
+      notif.cancel(o['id']);
+      D.events.remove(o);
+    }
+    D.events.add(e);
+    upd(); // اول نمایش و ذخیره؛ بعد اعلان (خطای اعلان دیگر جلوی نمایش را نمی‌گیرد)
+    await schedule(e);
+  }
+
+  void goM(int d) => setState(() {
+        cm += d;
+        if (cm > 12) {
+          cm = 1;
+          cy++;
+        }
+        if (cm < 1) {
+          cm = 12;
+          cy--;
+        }
+      });
+
+  Widget cal() {
+    bool onDay(Map e, DateTime d) {
+      final s = ds(d);
+      return e['wd'] == d.weekday && s.compareTo(e['from']) >= 0 && s.compareTo(e['to']) <= 0;
+    }
+
+    int mark(DateTime d) =>
+        D.events.where((e) => onDay(e, d)).length + D.tasks.where((k) => k['done'] != true && k['r'] != null && (k['r'] as String).startsWith(ds(d))).length;
+    final dayEv = D.events.where((e) => onDay(e, sel)).toList()..sort(byStart);
+    final dayTk = D.tasks.where((k) => k['r'] != null && (k['r'] as String).startsWith(ds(sel))).toList();
+    final today = DateTime.now();
+    return ListView(padding: const EdgeInsets.only(bottom: 90), children: [
+      Card(
+          margin: const EdgeInsets.all(12),
+          child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(children: [
+                Row(children: [
+                  IconButton(icon: const Icon(Icons.chevron_right), onPressed: () => goM(-1)),
+                  Expanded(child: Center(child: Text('${jmn[cm - 1]} $cy', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)))),
+                  TextButton(
+                      onPressed: () {
+                        final j = g2j(today.year, today.month, today.day);
+                        setState(() {
+                          cy = j[0];
+                          cm = j[1];
+                          sel = DateTime(today.year, today.month, today.day);
+                        });
+                      },
+                      child: const Text('امروز')),
+                  IconButton(icon: const Icon(Icons.chevron_left), onPressed: () => goM(1)),
+                ]),
+                monthGrid(context, cy, cm, sel: sel, mark: mark, onTap: (d) => setState(() => sel = d)),
+              ]))),
+      Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Text(fdl(sel), style: const TextStyle(fontWeight: FontWeight.bold))),
+      if (dayEv.isEmpty && dayTk.isEmpty) const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('برنامه‌ای برای این روز نیست.')),
+      for (final e in dayEv)
+        ListTile(dense: true, leading: const Icon(Icons.schedule), title: Text(e['t']), subtitle: Text('${hm(e['s'])} – ${hm(e['e'])}'), onTap: () => addEvent(e)),
+      for (final k in dayTk)
+        ListTile(
+            dense: true,
+            leading: Icon(k['done'] == true ? Icons.check_circle : Icons.alarm),
+            title: Text(k['t']),
+            subtitle: Text((k['r'] as String).substring(11, 16))),
+      const Divider(height: 32),
+      const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('برنامه‌ی هفتگی', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+      for (final d in wdo) ...[
+        Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Text(wdn[d]!, style: TextStyle(fontWeight: FontWeight.bold, color: d == 5 ? Colors.red : null))),
+        for (final e in D.events.where((e) => e['wd'] == d).toList()..sort(byStart))
+          ListTile(
+              onTap: () => addEvent(e),
+              title: Text(e['t']),
+              subtitle: Text('${hm(e['s'])} – ${hm(e['e'])}   تا ${fd(e['to'])}'),
+              trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => delEvent(e))),
+      ],
+    ]);
+  }
+
+  // ── مالی ──
+  void delTx(Map x) {
+    final i = D.txs.indexOf(x);
+    D.txs.remove(x);
+    upd();
+    undo('حذف شد', () {
+      D.txs.insert(i.clamp(0, D.txs.length), x);
+      upd();
+    });
+  }
+
+  Future<void> manageCats(BuildContext ctx) {
+    final c = TextEditingController();
+    return showDialog(
+        context: ctx,
+        builder: (_) => StatefulBuilder(builder: (dc, set) {
+              void add() {
+                final v = c.text.trim();
+                if (v.isEmpty || D.cats.contains(v)) return;
+                D.cats.add(v);
+                D.save();
+                c.clear();
+                set(() {});
+              }
+
+              return AlertDialog(
+                title: const Text('مدیریت دسته‌ها'),
+                content: SizedBox(
+                    width: 300,
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Row(children: [
+                        Expanded(child: TextField(controller: c, decoration: const InputDecoration(hintText: 'دسته‌ی جدید'), onSubmitted: (_) => add())),
+                        IconButton(icon: const Icon(Icons.add_circle), onPressed: add),
+                      ]),
+                      Flexible(
+                          child: ListView(shrinkWrap: true, children: [
+                        for (final k in List.of(D.cats))
+                          ListTile(
+                              dense: true,
+                              title: Text(k),
+                              trailing: k == 'سایر'
+                                  ? null
+                                  : IconButton(
+                                      icon: const Icon(Icons.delete_outline),
+                                      onPressed: () {
+                                        D.cats.remove(k);
+                                        D.save();
+                                        set(() {});
+                                      }))
+                      ])),
+                    ])),
+                actions: [TextButton(onPressed: () => Navigator.pop(dc), child: const Text('تمام'))],
+              );
+            }));
+  }
+
+  Future<void> txSheet([Map? o]) async {
+    final amt = TextEditingController(text: o != null ? n(o['a']) : ''), ttl = TextEditingController(text: o?['t'] ?? '');
+    var inc = o?['inc'] == true;
+    var cat = (o?['c'] ?? 'سایر') as String;
+    var date = o != null ? DateTime.parse(o['d']) : DateTime.now();
     await showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, set) {
-          final mode = prefs.getString('calendarMode') ?? 'jalali';
-          return SafeArea(
-            child: ListView(
-              shrinkWrap: true,
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-              children: [
-                const Text('شخصی‌سازی', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 14),
-                const Text('تقویم اصلی'),
-                const SizedBox(height: 6),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'jalali', label: Text('شمسی')),
-                    ButtonSegment(value: 'gregorian', label: Text('میلادی')),
-                  ],
-                  selected: {mode},
-                  onSelectionChanged: (s) {
-                    prefs.setString('calendarMode', s.first);
-                    refresh.value++;
-                    set(() {});
-                  },
-                ),
-                const SizedBox(height: 16),
-                ListTile(
-                  leading: const Icon(Icons.palette_outlined),
-                  title: const Text('رنگ برنامه'),
-                  subtitle: const Text('ظاهر برنامه را شخصی کن'),
-                  onTap: () async {
-                    final c = await showDialog<int>(
-                      context: ctx,
-                      builder: (_) => SimpleDialog(
-                        title: const Text('انتخاب رنگ'),
-                        children: [
-                          for (var i=0; i<colors.length; i++)
-                            SimpleDialogOption(
-                              onPressed: () => Navigator.pop(_, i),
-                              child: Row(children: [CircleAvatar(backgroundColor: colors[i], radius: 12), const SizedBox(width: 10), Text('رنگ ${i+1}')]),
-                            )
-                        ],
-                      ),
-                    );
-                    if (c != null) {
-                      prefs.setInt('clr', c);
-                      refresh.value++;
-                      set(() {});
-                    }
-                  },
-                ),
-                SwitchListTile(
-                  value: prefs.getString('theme') == 'dark',
-                  title: const Text('حالت تاریک'),
-                  onChanged: (v) {
-                    prefs.setString('theme', v ? 'dark' : 'light');
-                    refresh.value++;
-                    set(() {});
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.payments_outlined),
-                  title: const Text('واحد پول'),
-                  subtitle: Text(currency),
-                  onTap: () async {
-                    final v = await showDialog<String>(
-                      context: ctx,
-                      builder: (_) => SimpleDialog(
-                        title: const Text('واحد پول'),
-                        children: ['تومان','ریال','دلار','یورو'].map((x) => SimpleDialogOption(onPressed: () => Navigator.pop(_, x), child: Text(x))).toList(),
-                      ),
-                    );
-                    if (v != null) {
-                      prefs.setString('currency', v);
-                      refresh.value++;
-                      set(() {});
-                    }
-                  },
-                ),
-                const Divider(),
-                ListTile(
-                  leading: const Icon(Icons.security_outlined),
-                  title: const Text('حفظ اطلاعات هنگام آپدیت'),
-                  subtitle: const Text('اطلاعات روی حافظه برنامه نگهداری می‌شود؛ برای نسخه‌های بعدی مهاجرت داده انجام می‌شود.'),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('نسخه داده'),
-                  subtitle: Text('Schema ${Store.schema}'),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => StatefulBuilder(builder: (ctx, set) {
+              final list = [...D.cats, if (!D.cats.contains(cat)) cat];
+              return Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+                  child: SingleChildScrollView(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    TextField(controller: ttl, decoration: const InputDecoration(labelText: 'عنوان')),
+                    TextField(
+                        controller: amt,
+                        autofocus: o == null,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [ThousandFmt()],
+                        decoration: const InputDecoration(labelText: 'مبلغ (تومان)')),
+                    const SizedBox(height: 8),
+                    SegmentedButton<bool>(
+                        segments: const [ButtonSegment(value: false, label: Text('هزینه')), ButtonSegment(value: true, label: Text('درآمد'))],
+                        selected: {inc},
+                        onSelectionChanged: (s) => set(() => inc = s.first)),
+                    ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.event),
+                        title: Text(fdl(date)),
+                        onTap: () async {
+                          final d = await pickDate(ctx, initial: date, help: 'تاریخ تراکنش');
+                          if (d != null) set(() => date = d);
+                        }),
+                    Wrap(spacing: 6, children: [
+                      for (final k in list) ChoiceChip(label: Text(k), selected: cat == k, onSelected: (_) => set(() => cat = k)),
+                      ActionChip(
+                          avatar: const Icon(Icons.edit, size: 16),
+                          label: const Text('مدیریت دسته‌ها'),
+                          onPressed: () async {
+                            await manageCats(ctx);
+                            set(() {
+                              if (!D.cats.contains(cat)) cat = 'سایر';
+                            });
+                          }),
+                    ]),
+                    const SizedBox(height: 8),
+                    FilledButton(
+                        onPressed: () {
+                          final v = int.tryParse(en(amt.text));
+                          if (v == null || v == 0) return;
+                          final m = {'a': v, 'inc': inc, 'c': cat, 't': ttl.text.trim(), 'd': ds(date)};
+                          if (o != null) {
+                            o.addAll(m);
+                          } else {
+                            D.txs.add({'id': DateTime.now().microsecondsSinceEpoch, ...m});
+                          }
+                          Navigator.pop(ctx);
+                          upd();
+                        },
+                        child: Text(o != null ? 'ذخیره‌ی تغییرات' : 'ثبت')),
+                  ])));
+            }));
+  }
+
+  Widget money() {
+    final now = DateTime.now();
+    final wk = now.subtract(Duration(days: (now.weekday + 1) % 7));
+    int sum(Iterable<Map> l, bool inc) => l.where((x) => x['inc'] == inc).fold(0, (p, x) => p + (x['a'] as int));
+    Iterable<Map> since(String from) => D.txs.where((x) => (x['d'] as String).compareTo(from) >= 0);
+    final froms = {'امروز': ds(now), 'این هفته': ds(wk), 'این ماه': monthStart(now)};
+    final found = D.txs.where((x) => '${x['t'] ?? ''} ${x['c']}'.contains(q)).toList()
+      ..sort((a, b) {
+        final c = (b['d'] as String).compareTo(a['d']);
+        return c != 0 ? c : (b['id'] as int).compareTo(a['id'] as int);
+      });
+    return ListView(padding: const EdgeInsets.all(12), children: [
+      TextField(
+          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'جستجو در عنوان یا دسته'),
+          onChanged: (v) => setState(() => q = v.trim())),
+      if (q.isNotEmpty)
+        Card(child: ListTile(title: Text('${found.length} بار'), subtitle: Text('درآمد ${n(sum(found, true))}  |  هزینه ${n(sum(found, false))}')))
+      else
+        for (final f in froms.entries)
+          Card(
+              child: ListTile(
+                  title: Text(f.key),
+                  subtitle: Text('درآمد ${n(sum(since(f.value), true))}  |  هزینه ${n(sum(since(f.value), false))}'),
+                  trailing: Text(n(sum(since(f.value), true) - sum(since(f.value), false)), style: const TextStyle(fontWeight: FontWeight.bold)))),
+      for (final x in found.take(q.isEmpty ? 30 : 500))
+        Dismissible(
+            key: ObjectKey(x),
+            background: Container(color: Colors.red),
+            onDismissed: (_) => delTx(x),
+            child: ListTile(
+                dense: true,
+                onTap: () => txSheet(x),
+                leading: Icon(x['inc'] == true ? Icons.south_west : Icons.north_east, color: x['inc'] == true ? Colors.green : Colors.red),
+                title: Text((x['t'] ?? '') != '' ? x['t'] : x['c']),
+                subtitle: Text('${x['c']} • ${fd(x['d'])}'),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(n(x['a'])),
+                  IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => delTx(x)),
+                ]))),
+      const SizedBox(height: 80),
+    ]);
   }
 
   @override
-  Widget build(BuildContext context) {
-    final pages = [homeTab(), tasksTab(), calendarTab(), moneyTab(), goalsTab()];
-    final titles = ['خانه', 'کارها', 'تقویم', 'مالی', 'اهداف'];
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(titles[tab], style: const TextStyle(fontWeight: FontWeight.w800)),
-        actions: [
-          IconButton(onPressed: showSettings, icon: const Icon(Icons.settings_outlined)),
-        ],
-      ),
-      body: pages[tab],
-      floatingActionButton: tab == 0
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: () {
-                if (tab == 1) addTask();
-                if (tab == 2) addEvent();
-                if (tab == 3) addTransaction();
-                if (tab == 4) addGoal();
-              },
-              icon: const Icon(Icons.add),
-              label: Text(tab == 1 ? 'کار' : tab == 2 ? 'برنامه' : tab == 3 ? 'تراکنش' : 'هدف'),
-            ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: tab,
-        onDestinationSelected: (i) => setState(() => tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_rounded), label: 'خانه'),
-          NavigationDestination(icon: Icon(Icons.check_circle_outline), label: 'کارها'),
-          NavigationDestination(icon: Icon(Icons.calendar_month_rounded), label: 'تقویم'),
-          NavigationDestination(icon: Icon(Icons.account_balance_wallet_rounded), label: 'مالی'),
-          NavigationDestination(icon: Icon(Icons.flag_rounded), label: 'اهداف'),
-        ],
-      ),
-    );
-  }
-}
-
-/* -------------------- Calendar -------------------- */
-
-class PlannerCalendar extends StatefulWidget {
-  final bool jalali;
-  final List<Map> events;
-  final List<Map> tasks;
-  final Future<void> Function([Map?]) onAddEvent;
-  final Future<void> Function(Map) onDeleteEvent;
-
-  const PlannerCalendar({
-    super.key,
-    required this.jalali,
-    required this.events,
-    required this.tasks,
-    required this.onAddEvent,
-    required this.onDeleteEvent,
-  });
-
-  @override
-  State<PlannerCalendar> createState() => _PlannerCalendarState();
-}
-
-class _PlannerCalendarState extends State<PlannerCalendar> {
-  late DateTime selected;
-  late int y;
-  late int m;
-
-  @override
-  void initState() {
-    super.initState();
-    selected = dateOnly(DateTime.now());
-    final p = widget.jalali ? g2j(selected.year, selected.month, selected.day) : [selected.year, selected.month, selected.day];
-    y = p[0]; m = p[1];
-  }
-
-  @override
-  void didUpdateWidget(covariant PlannerCalendar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.jalali != widget.jalali) {
-      final p = widget.jalali ? g2j(selected.year, selected.month, selected.day) : [selected.year, selected.month, selected.day];
-      y = p[0]; m = p[1];
-    }
-  }
-
-  int monthLength() => widget.jalali ? jalaliMonthLength(y, m) : DateTime(y, m + 1, 0).day;
-
-  DateTime cellDate(int day) {
-    if (widget.jalali) {
-      final g = j2g(y, m, day);
-      return DateTime(g[0], g[1], g[2]);
-    }
-    return DateTime(y, m, day);
-  }
-
-  int firstOffset() {
-    final d = cellDate(1).weekday;
-    return (d + 1) % 7; // Saturday = 0
-  }
-
-  String monthTitle() => widget.jalali ? '${monthsFa[m-1]} $y' : '${monthsEn[m-1]} $y';
-
-  void moveMonth(int delta) {
-    m += delta;
-    if (widget.jalali) {
-      if (m > 12) { m = 1; y++; }
-      if (m < 1) { m = 12; y--; }
-    } else {
-      if (m > 12) { m = 1; y++; }
-      if (m < 1) { m = 12; y--; }
-    }
-    setState(() {});
-  }
-
-  bool same(DateTime a, DateTime b) => ds(a) == ds(b);
-
-  List<Map> eventsFor(DateTime d) {
-    final iso = ds(d);
-    final wd = d.weekday;
-    return widget.events.where((e) {
-      final from = e['from'] as String? ?? '0000-00-00';
-      final to = e['to'] as String? ?? '9999-99-99';
-      return e['wd'] == wd && iso.compareTo(from) >= 0 && iso.compareTo(to) <= 0;
-    }).toList()..sort((a,b) => (a['s'] as int).compareTo(b['s'] as int));
-  }
-
-  List<Map> tasksFor(DateTime d) {
-    final iso = ds(d);
-    return widget.tasks.where((t) => (t['r'] as String?)?.substring(0,10) == iso).toList();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final len = monthLength();
-    final offset = firstOffset();
-    final cells = <Widget>[];
-
-    for (var i = 0; i < offset; i++) {
-      cells.add(const SizedBox(height: 58));
-    }
-
-    for (var day = 1; day <= len; day++) {
-      final date = cellDate(day);
-      final ev = eventsFor(date);
-      final tk = tasksFor(date);
-      final isToday = same(date, DateTime.now());
-      final isSelected = same(date, selected);
-
-      cells.add(
-        InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: () => setState(() => selected = date),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            height: 58,
-            margin: const EdgeInsets.all(2),
-            padding: const EdgeInsets.all(5),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? Theme.of(context).colorScheme.primaryContainer
-                  : isToday ? Theme.of(context).colorScheme.surfaceContainerHighest : null,
-              borderRadius: BorderRadius.circular(14),
-              border: isToday ? Border.all(color: Theme.of(context).colorScheme.primary, width: 1.5) : null,
-            ),
-            child: Column(
-              children: [
-                Align(
-                  alignment: Alignment.center,
-                  child: Text('$day', style: TextStyle(fontWeight: isToday ? FontWeight.w900 : FontWeight.w500)),
-                ),
-                const Spacer(),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (ev.isNotEmpty) ...[
-                      _dot(context, Colors.deepPurple),
-                      const SizedBox(width: 3),
-                    ],
-                    if (tk.isNotEmpty) _dot(context, Colors.orange),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
+  Widget build(BuildContext c) => Scaffold(
+        appBar: AppBar(title: Text(['کارها', 'برنامه‌ی هفتگی', 'مالی'][tab]), actions: [
+          IconButton(icon: const Icon(Icons.help_outline), tooltip: 'راهنما', onPressed: openGuide),
+          IconButton(icon: const Icon(Icons.settings), tooltip: 'تنظیمات', onPressed: settings),
+        ]),
+        body: [tasks, cal, money][tab](),
+        floatingActionButton: FloatingActionButton(
+            onPressed: () => [() => taskSheet(), () => addEvent(), () => txSheet()][tab](), child: const Icon(Icons.add)),
+        bottomNavigationBar: NavigationBar(
+            selectedIndex: tab,
+            onDestinationSelected: (i) => setState(() => tab = i),
+            destinations: const [
+              NavigationDestination(icon: Icon(Icons.checklist), label: 'کارها'),
+              NavigationDestination(icon: Icon(Icons.calendar_month), label: 'تقویم'),
+              NavigationDestination(icon: Icon(Icons.account_balance_wallet), label: 'مالی'),
+            ]),
       );
-    }
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 100),
-      children: [
-        Card(
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 12, 8, 14),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    IconButton(onPressed: () => moveMonth(-1), icon: const Icon(Icons.chevron_right)),
-                    Expanded(child: Center(child: Text(monthTitle(), style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900)))),
-                    IconButton(onPressed: () => moveMonth(1), icon: const Icon(Icons.chevron_left)),
-                  ],
-                ),
-                Row(
-                  children: [for (final w in weekdaysShort) Expanded(child: Center(child: Text(w, style: const TextStyle(fontWeight: FontWeight.bold))))],
-                ),
-                const SizedBox(height: 4),
-                GridView.count(
-                  crossAxisCount: 7,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  childAspectRatio: 1.0,
-                  children: cells,
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        Card(
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(formatDate(selected, widget.jalali), style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
-                Text('${weekdaysFa[(selected.weekday + 1) % 7]} • برنامه‌های تکرارشونده و کارهای روز'),
-                const SizedBox(height: 12),
-                ...eventsFor(selected).map((e) => ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: CircleAvatar(child: const Icon(Icons.event)),
-                  title: Text(e['t']),
-                  subtitle: Text('${hm(e['s'])} تا ${hm(e['e'])} • ${e['kind']} • هفتگی'),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (v) async {
-                      if (v == 'delete') await widget.onDeleteEvent(e);
-                      if (v == 'edit') await widget.onAddEvent(e);
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'edit', child: Text('ویرایش')),
-                      PopupMenuItem(value: 'delete', child: Text('حذف')),
-                    ],
-                  ),
-                )),
-                ...tasksFor(selected).map((t) => ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.task_alt),
-                  title: Text(t['t']),
-                  subtitle: Text(t['done'] == true ? 'انجام شده' : 'در انتظار انجام'),
-                )),
-                if (eventsFor(selected).isEmpty && tasksFor(selected).isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('برای این روز برنامه‌ای ثبت نشده.'),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _dot(BuildContext context, Color color) => Container(
-    width: 6, height: 6,
-    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-  );
-}
-
-class CalendarDialog extends StatefulWidget {
-  final DateTime initial;
-  final bool jalali;
-  const CalendarDialog({super.key, required this.initial, required this.jalali});
-
-  @override
-  State<CalendarDialog> createState() => _CalendarDialogState();
-}
-
-class _CalendarDialogState extends State<CalendarDialog> {
-  late DateTime selected;
-  late int y, m;
-
-  @override
-  void initState() {
-    super.initState();
-    selected = dateOnly(widget.initial);
-    final p = widget.jalali ? g2j(selected.year, selected.month, selected.day) : [selected.year, selected.month, selected.day];
-    y = p[0]; m = p[1];
-  }
-
-  int len() => widget.jalali ? jalaliMonthLength(y,m) : DateTime(y,m+1,0).day;
-  DateTime gd(int day) {
-    if (widget.jalali) {
-      final g = j2g(y,m,day);
-      return DateTime(g[0],g[1],g[2]);
-    }
-    return DateTime(y,m,day);
-  }
-  int offset() => (gd(1).weekday + 1) % 7;
-  void move(int delta) {
-    m += delta;
-    if (m > 12) { m=1; y++; }
-    if (m < 1) { m=12; y--; }
-    setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cells = <Widget>[];
-    for (var i=0;i<offset();i++) cells.add(const SizedBox(height:42));
-    for (var day=1;day<=len();day++) {
-      final d=gd(day);
-      final active=ds(d)==ds(selected);
-      cells.add(InkWell(
-        onTap: () => setState(() => selected=d),
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          margin: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            color: active ? Theme.of(context).colorScheme.primary : null,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Center(child: Text('$day', style: TextStyle(color: active ? Theme.of(context).colorScheme.onPrimary : null))),
-        ),
-      ));
-    }
-    final title = widget.jalali ? '${monthsFa[m-1]} $y' : '${monthsEn[m-1]} $y';
-    return AlertDialog(
-      title: Row(
-        children: [
-          IconButton(onPressed: ()=>move(-1), icon: const Icon(Icons.chevron_right)),
-          Expanded(child: Center(child: Text(title))),
-          IconButton(onPressed: ()=>move(1), icon: const Icon(Icons.chevron_left)),
-        ],
-      ),
-      content: SizedBox(
-        width: 360,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(children:[for(final w in weekdaysShort) Expanded(child:Center(child:Text(w,style:const TextStyle(fontWeight:FontWeight.bold))))]),
-            const SizedBox(height:4),
-            GridView.count(crossAxisCount:7, shrinkWrap:true, physics:const NeverScrollableScrollPhysics(), childAspectRatio:1.1, children:cells),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('لغو')),
-        FilledButton(onPressed: ()=>Navigator.pop(context, selected), child: const Text('انتخاب')),
-      ],
-    );
-  }
 }
